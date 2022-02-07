@@ -1,0 +1,535 @@
+---
+title: "BR_bias"
+author: "Fernando Rawicz"
+date: "12/05/2021"
+output: html_document
+---
+
+```{r message = FALSE}
+options(scipen = 9999)
+
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+set.seed(415)
+
+library(rstan)
+library(shinystan)
+library(stringr)
+library(dplyr)
+library(readxl)
+library(gtools)
+library(rjags)
+library(runjags)
+library(brms)
+library(knitr)
+library(DT)
+library(bayesplot)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+```
+
+## R Markdown
+
+```{r}
+candidates <- c("PSL", "PT", "PDT", "PSC", "PSDB", "PSOL", "PMDB", "NOVO", "PPL", "REDE", "PSTU")
+
+br_datafolha <- read_excel("data/pollsbrazil.xltx", sheet = "Datafolha")%>% 
+  filter(Party %in% candidates)%>% 
+  # mutate(Partyiid = match(Party , sort(unique(Party)))) %>% 
+  mutate(Bias = Result  - Poll ) %>% 
+  mutate(Company = "Datafolha")
+
+
+br_ibope <- read_excel("data/pollsbrazil.xltx", sheet = "Ibope")%>% 
+  filter(Party %in% candidates)%>% 
+  # mutate(Partyiid = match(Party , sort(unique(Party)))) %>% 
+  mutate(Bias = Poll - Result) %>% 
+  mutate(Company = "Ibope")
+
+
+
+br_bias_final <- rbind(br_datafolha, br_ibope) %>% 
+  mutate(Companyiid = match(Company , sort(unique(Company))))  %>% 
+  mutate(Eleciid = match(Election , sort(unique(Election)))) %>% 
+  mutate(Partyiid = match(Party , sort(unique(Party))))
+
+DT::datatable(br_bias_final)
+
+```
+
+
+```{r}
+
+boxplot(Bias ~ Company, data=br_bias_final, main="Boxplot Bias all elections Datafolha and Ibope")
+
+
+boxplot(Bias ~ Company, data=br_bias_final %>% filter(Election == "Pres"), main="Boxplot Bias President Datafolha and Ibope")
+
+```
+
+
+## Model with just house and party
+
+```{r}
+mod_string = " 
+model {
+## sampling
+for (i in 1:N){
+   y[i] ~ dnorm(mu_party[PartyIndex[i]] + mu_house[HouseIndex[i]] , invsigma2)
+}
+
+## priors
+for (j in 1:J){
+   mu_party[j] ~ dnorm(mu, invtau2)
+}
+
+for (h in 1:H){
+   mu_house[h] ~ dnorm(mu, invtau2)
+}
+
+
+invsigma2 ~ dgamma(1.5, 6)
+sigma <- sqrt(pow(invsigma2, -1))
+
+## hyperpriors
+
+mu ~ dnorm(0, 4)
+invtau2 ~ dgamma(3, 1)
+tau <- sqrt(pow(invtau2, -1))
+
+}"
+
+
+
+
+```
+
+
+
+
+
+
+```{r}
+params = c("mu_party", "mu_house", "mu", "invtau2", "invsigma2")
+
+
+
+the_data <- list("y" = br_bias_final$Bias,
+                 "PartyIndex" = br_bias_final$Partyiid,
+                 "HouseIndex" = br_bias_final$Companyiid,
+                 "N" = length(br_bias_final$Bias),
+                 "J" = length(unique(br_bias_final$Partyiid)),
+                 "H" = length(unique(br_bias_final$Companyiid))
+                 )
+
+
+mod = jags.model(textConnection(mod_string), data=the_data, n.chains=3)
+update(mod, 1e3)
+
+mod_sim = coda.samples(model=mod,
+                       variable.names=params,
+                       n.iter=5e3)
+
+mod_csim = as.mcmc(do.call(rbind, mod_sim))
+mcmcresults1 = as.mcmc(do.call(rbind, mod_sim))
+# plot(mod_sim)
+traceplot(mod_sim, col = 1:3)
+
+gelman.diag(mod_sim)
+
+dic = dic.samples(mod, n.iter=1e3)
+
+(pm_params = colMeans(mod_csim))
+
+aaa <- summary(mod_sim)
+# xtable::xtable(as.data.frame(aaa$statistics))
+```
+
+
+
+## Model with house, party and election type
+
+
+
+
+```{r}
+mod_string2 = " 
+model {
+## sampling
+for (i in 1:N){
+   y[i] ~ dnorm(mu_party[PartyIndex[i]] + mu_house[HouseIndex[i]] + mu_elec[ElecIndex[i]] , invsigma2)
+}
+
+## priors
+for (j in 1:J){
+   mu_party[j] ~ dnorm(mu, invtau2)
+}
+
+for (h in 1:H){
+   mu_house[h] ~ dnorm(mu, invtau2)
+}
+
+for (r in 1:R){
+   mu_elec[r] ~ dnorm(mu, invtau2)
+}
+
+
+invsigma2 ~ dgamma(1.5, 6)
+sigma <- sqrt(pow(invsigma2, -1))
+
+## hyperpriors
+
+mu ~ dnorm(0, 4)
+invtau2 ~ dgamma(1, 3)
+tau <- sqrt(pow(invtau2, -1))
+
+}"
+
+
+
+set.seed(115)
+
+
+params = c("mu_party", "mu_house","mu_elec", "mu", "invtau2", "invsigma2")
+
+the_data2 <- list("y" = br_bias_final$Bias,
+                 "PartyIndex" = br_bias_final$Partyiid,
+                 "HouseIndex" = br_bias_final$Companyiid,
+                 "ElecIndex" = br_bias_final$Eleciid,
+                 "N" = length(br_bias_final$Bias),
+                 "J" = length(unique(br_bias_final$Partyiid)),
+                 "H" = length(unique(br_bias_final$Companyiid)),
+                 "R" = length(unique(br_bias_final$Eleciid))
+)
+
+```
+
+
+
+
+```{r}
+
+mod2 = jags.model(textConnection(mod_string2), data=the_data2, n.chains=3)
+update(mod2, 1e3)
+
+mod_sim2 = coda.samples(model=mod2,
+                       variable.names=params,
+                       n.iter=5e3)
+
+mod_csim2 = as.mcmc(do.call(rbind, mod_sim2))
+mcmcresults2 = as.mcmc(do.call(rbind, mod_sim))
+
+traceplot(mod_sim2, col = 1:3)
+
+gelman.diag(mod_sim2)
+dic = dic.samples(mod2, n.iter=1e3)
+
+
+(pm_params = colMeans(mod_csim2))
+
+
+
+bbb <-summary(mod_sim2)
+
+# xtable(as.data.frame(bbb$statistics))
+
+```
+
+
+## Sensitivity analysis
+
+For the sensitivity analysis we will assume very high values for our uncertain variance and nu_o
+
+
+
+
+### Model with just house and party
+
+```{r}
+mod_string = " 
+model {
+## sampling
+for (i in 1:N){
+   y[i] ~ dnorm(mu_party[PartyIndex[i]] + mu_house[HouseIndex[i]] , invsigma2)
+}
+
+## priors
+for (j in 1:J){
+   mu_party[j] ~ dnorm(mu, invtau2)
+}
+
+for (h in 1:H){
+   mu_house[h] ~ dnorm(mu, invtau2)
+}
+
+
+invsigma2 ~ dgamma(1.5, 15)
+sigma <- sqrt(pow(invsigma2, -1))
+
+## hyperpriors
+
+mu ~ dnorm(0, 4)
+invtau2 ~ dgamma(2.5, 12.5)
+tau <- sqrt(pow(invtau2, -1))
+
+}"
+
+
+
+
+
+params = c("mu_party", "mu_house", "mu", "invtau2", "invsigma2")
+
+
+
+the_data <- list("y" = br_bias_final$Bias,
+                 "PartyIndex" = br_bias_final$Partyiid,
+                 "HouseIndex" = br_bias_final$Companyiid,
+                 "N" = length(br_bias_final$Bias),
+                 "J" = length(unique(br_bias_final$Partyiid)),
+                 "H" = length(unique(br_bias_final$Companyiid))
+                 )
+
+
+mod = jags.model(textConnection(mod_string), data=the_data, n.chains=3)
+update(mod, 1e3)
+
+mod_sim = coda.samples(model=mod,
+                       variable.names=params,
+                       n.iter=5e3)
+
+mod_csim = as.mcmc(do.call(rbind, mod_sim))
+
+(pm_params = colMeans(round(mod_csim,2)))
+
+
+
+```
+
+```{r}
+mod_string = " 
+model {
+## sampling
+for (i in 1:N){
+   y[i] ~ dnorm(mu_party[PartyIndex[i]] + mu_house[HouseIndex[i]] , invsigma2)
+}
+
+## priors
+for (j in 1:J){
+   mu_party[j] ~ dnorm(mu, invtau2)
+}
+
+for (h in 1:H){
+   mu_house[h] ~ dnorm(mu, invtau2)
+}
+
+
+invsigma2 ~ dgamma(1.5, 30)
+sigma <- sqrt(pow(invsigma2, -1))
+
+## hyperpriors
+
+mu ~ dnorm(0, 4)
+invtau2 ~ dgamma(5, 50)
+tau <- sqrt(pow(invtau2, -1))
+
+}"
+
+
+
+
+
+params = c("mu_party", "mu_house", "mu", "invtau2", "invsigma2")
+
+
+
+the_data <- list("y" = br_bias_final$Bias,
+                 "PartyIndex" = br_bias_final$Partyiid,
+                 "HouseIndex" = br_bias_final$Companyiid,
+                 "N" = length(br_bias_final$Bias),
+                 "J" = length(unique(br_bias_final$Partyiid)),
+                 "H" = length(unique(br_bias_final$Companyiid))
+                 )
+
+
+mod = jags.model(textConnection(mod_string), data=the_data, n.chains=3)
+update(mod, 1e3)
+
+mod_sim = coda.samples(model=mod,
+                       variable.names=params,
+                       n.iter=5e3)
+
+mod_csim = as.mcmc(do.call(rbind, mod_sim))
+
+(pm_params = colMeans(round(mod_csim,2)))
+
+
+
+```
+
+### Model with house, party and election type
+
+
+```{r}
+mod_string2 = " 
+model {
+## sampling
+for (i in 1:N){
+   y[i] ~ dnorm(mu_party[PartyIndex[i]] + mu_house[HouseIndex[i]] + mu_elec[ElecIndex[i]] , invsigma2)
+}
+
+## priors
+for (j in 1:J){
+   mu_party[j] ~ dnorm(mu, invtau2)
+}
+
+for (h in 1:H){
+   mu_house[h] ~ dnorm(mu, invtau2)
+}
+
+for (r in 1:R){
+   mu_elec[r] ~ dnorm(mu, invtau2)
+}
+
+
+invsigma2 ~ dgamma(1.5, 15)
+sigma <- sqrt(pow(invsigma2, -1))
+
+## hyperpriors
+
+mu ~ dnorm(0, 4)
+invtau2 ~ dgamma(1, 3)
+tau <- sqrt(pow(invtau2, -1))
+
+}"
+
+
+
+set.seed(115)
+
+
+params = c("mu_party", "mu_house","mu_elec", "mu", "invtau2", "invsigma2")
+
+the_data2 <- list("y" = br_bias_final$Bias,
+                 "PartyIndex" = br_bias_final$Partyiid,
+                 "HouseIndex" = br_bias_final$Companyiid,
+                 "ElecIndex" = br_bias_final$Eleciid,
+                 "N" = length(br_bias_final$Bias),
+                 "J" = length(unique(br_bias_final$Partyiid)),
+                 "H" = length(unique(br_bias_final$Companyiid)),
+                 "R" = length(unique(br_bias_final$Eleciid))
+)
+
+
+mod2 = jags.model(textConnection(mod_string2), data=the_data2, n.chains=3)
+update(mod2, 1e3)
+
+mod_sim2 = coda.samples(model=mod2,
+                       variable.names=params,
+                       n.iter=5e3)
+
+mod_csim2 = as.mcmc(do.call(rbind, mod_sim2))
+
+(pm_params = colMeans(round(mod_csim2,2)))
+
+
+```
+
+
+
+
+```{r}
+mod_string2 = " 
+model {
+## sampling
+for (i in 1:N){
+   y[i] ~ dnorm(mu_party[PartyIndex[i]] + mu_house[HouseIndex[i]] + mu_elec[ElecIndex[i]] , invsigma2)
+}
+
+## priors
+for (j in 1:J){
+   mu_party[j] ~ dnorm(mu, invtau2)
+}
+
+for (h in 1:H){
+   mu_house[h] ~ dnorm(mu, invtau2)
+}
+
+for (r in 1:R){
+   mu_elec[r] ~ dnorm(mu, invtau2)
+}
+
+
+invsigma2 ~ dgamma(1.5, 30)
+sigma <- sqrt(pow(invsigma2, -1))
+
+## hyperpriors
+
+mu ~ dnorm(0, 4)
+invtau2 ~ dgamma(1, 3)
+tau <- sqrt(pow(invtau2, -1))
+
+}"
+
+
+
+set.seed(115)
+
+
+params = c("mu_party", "mu_house","mu_elec", "mu", "invtau2", "invsigma2")
+
+the_data2 <- list("y" = br_bias_final$Bias,
+                 "PartyIndex" = br_bias_final$Partyiid,
+                 "HouseIndex" = br_bias_final$Companyiid,
+                 "ElecIndex" = br_bias_final$Eleciid,
+                 "N" = length(br_bias_final$Bias),
+                 "J" = length(unique(br_bias_final$Partyiid)),
+                 "H" = length(unique(br_bias_final$Companyiid)),
+                 "R" = length(unique(br_bias_final$Eleciid))
+)
+
+mod2 = jags.model(textConnection(mod_string2), data=the_data2, n.chains=3)
+update(mod2, 1e3)
+
+mod_sim2 = coda.samples(model=mod2,
+                       variable.names=params,
+                       n.iter=5e3)
+
+mod_csim2 = as.mcmc(do.call(rbind, mod_sim2))
+
+(pm_params = colMeans(round(mod_csim2,2)))
+
+
+```
+
+## Posterior analysis
+
+```{r}
+
+library(bayesplot)
+
+
+mcmc_areas(
+  mcmcresults1,    
+  prob = 0.90,
+regex_pars = c("mu_house", "mu_party")
+  
+  ) + 
+   labs(title="Posterior Parameters Brazil Model with house and party",
+        x ="Value in P.P", y = "Parameter")
+
+
+mcmc_areas(
+  mcmcresults2,    
+  prob = 0.90,
+regex_pars = c("mu_house", "mu_party")
+  
+  ) + 
+   labs(title="Posterior Parameters Brazil Model with house, \n election type and party",
+        x ="Value in P.P", y = "Parameter")
+
+
+
+
+
+```
+
