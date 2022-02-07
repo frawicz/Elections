@@ -1,0 +1,186 @@
+---
+title: "br_marginal"
+author: "Fernando Rawicz"
+date: "12/05/2021"
+output: html_document
+---
+
+```{r message = FALSE}
+rm(list = ls())
+
+options(scipen = 9999)
+
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+library(rstan)
+library(shinystan)
+library(stringr)
+library(dplyr)
+library(readxl)
+library(gtools)
+library(rjags)
+library(runjags)
+library(brms)
+library(knitr)
+library(DT)
+library(tidyverse)
+library(bsts)
+library(reshape2)
+library(xts)
+
+```
+
+
+```{r }
+br_polls <- read_excel("data/pollsbrazil.xltx") %>% 
+  arrange(Date) %>% 
+  mutate(sumlessnull = ( `PSL`+`PT`+`PDT`+`PSDB`+`REDE`+`NOVO`+
+                           `PODE`+`MDB`+`PATRI`+`PSOL`+`PSTU`+`DC`+`PPL` ) ) %>% 
+  filter(sumlessnull< 100) %>% 
+  filter(Company == "Datafolha" | Company == "Ibope")
+
+DT::datatable(br_polls)
+```
+
+```{r }
+parties <- c("PSL","PT","PDT","PSDB","REDE","NOVO",
+              "PODE","MDB","PATRI","PSOL","PSTU","DC","PPL", "Null", "Unknown")
+
+list_parties <- list()
+
+par(mfrow=c(3,5))
+
+# for (party in c(4:18)) {
+#   
+#    aaa <- br_polls[,party]
+#   
+#   
+#   list_parties[[party]] <- aaa[,1]
+#   
+#   
+#   
+#   plot.xts(xts(x = list_parties[[party]], order.by = as.Date(br_polls$Date ) ) )
+#   
+#   
+# }
+
+ plot.xts(xts(x = br_polls$PSL, order.by = as.Date(br_polls$Date ) ) )
+ 
+  plot.xts(xts(x = br_polls$PT, order.by = as.Date(br_polls$Date ) ) )
+
+  
+  
+  br_polls2 <- br_polls %>% 
+     as.data.frame() %>% 
+    mutate(
+      PSL = round((PSL *100) / sumlessnull, 2),
+      PT =  round((PT *100) / sumlessnull, 2),
+      PDT =  round((PDT *100) / sumlessnull, 2),
+      PSDB =  round((PSDB *100) / sumlessnull, 2),
+      REDE =  round((REDE *100) / sumlessnull, 2),
+      Others =  round((( NOVO + PODE + MDB + PATRI + PSOL + PSTU + DC + PPL)*100)/sumlessnull, 2)
+    ) %>% 
+    dplyr::select(c( "Date", "PSL","PT","PDT","PSDB","REDE", "Others"))
+  
+  
+  
+  
+  
+```
+
+
+
+
+
+
+```{r }
+
+psl <- as.ts(br_polls$PSL)
+
+ss = AddLocalLinearTrend(list(), psl)
+
+model = bsts(psl, state.specification = ss, niter = 10000)
+
+names(model)
+class(model)
+```
+
+
+
+```{r }
+
+sigmas = cbind(model$sigma.obs,
+model$sigma.trend.level,
+model$sigma.trend.slope,
+model$sigma.seasonal.12) 
+
+
+# sigmas2 <- sigmas %>% slice(seq(n()/2, n()))
+
+```
+
+
+```{r }
+par(mfrow=c(3,3))
+
+for (i in 1:3)
+ts.plot(sigmas[,i],ylab="")
+for (i in 1:3)
+acf(sigmas[5001:9999,i],main="")
+for (i in 1:3){
+hist(sigmas[5001:9999,i],xlab="",main="",prob=TRUE)}
+
+```
+
+
+
+```{r }
+p <- predict.bsts(model, horizon = 2, burn = 5000, quantiles = c(.025, .975))
+
+names(p)
+
+
+```
+
+
+
+
+```{r }
+components <- cbind.data.frame(
+  colMeans(model$state.contributions[-(1:5000),"trend",]),                               
+  as.Date(time(psl)))  
+names(components) <- c("Trend", "Date")
+components <- reshape2::melt(components, id="Date")
+names(components) <- c("Date", "Component", "Value")
+
+### Plot
+ggplot(data=components, aes(x=Date, y=Value)) + geom_line() + 
+  theme_bw() + theme(legend.title = element_blank()) + ylab("") + xlab("") + 
+  facet_grid(Component ~ ., scales="free") + guides(colour=FALSE) + 
+  theme(axis.text.x=element_text(angle = -90, hjust = 0))
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

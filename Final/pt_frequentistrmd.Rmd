@@ -1,0 +1,217 @@
+---
+title: "pt_frequentist"
+author: "Fernando Rawicz"
+date: "10/06/2021"
+output: html_document
+---
+
+```{r message = FALSE}
+rm(list = ls())
+
+options(scipen = 9999)
+
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+library(rstan)
+library(shinystan)
+library(stringr)
+library(dplyr)
+library(readxl)
+library(gtools)
+library(rjags)
+library(runjags)
+library(brms)
+library(knitr)
+library(DT)
+library(tidyverse)
+library(bsts)
+library(MARSS)
+library(reshape2)
+library(tidybayes)
+library(lubridate)
+library(gridExtra)
+```
+
+
+```{r message = FALSE}
+pt_polls <- read_excel("data/pollsportugal.xltx") %>% 
+  arrange(Date) %>% 
+  mutate(sumlessnull = as.numeric( as.numeric(`PS`) + as.numeric(`CHEGA`) + as.numeric(`PCP`) + as.numeric(`PSD`) +
+                           as.numeric(`BE`) + as.numeric(`IL`) + as.numeric(`RIR`) ) )
+
+
+```
+
+
+```{r message = FALSE}
+
+  
+  pt_polls2 <- pt_polls %>% 
+     as.data.frame() %>% 
+    mutate(
+      PSD = round((as.numeric(PSD) *100) / sumlessnull, 2),
+      PS =  round((as.numeric(PS) *100) / sumlessnull, 2),
+      CHEGA =  round((as.numeric(CHEGA) *100) / sumlessnull, 2),
+      Others =  round((( as.numeric(PCP) + as.numeric(BE) + as.numeric(IL) + as.numeric(RIR) )*100)/sumlessnull, 2)
+    ) %>% 
+    dplyr::select(c( "Date", "PSD","PS","CHEGA", "Others"))
+
+```
+
+
+
+
+```{r message = FALSE}
+
+  
+  pt_polls2 <- pt_polls2 %>% 
+  group_by(Date) %>% 
+ dplyr::summarize(
+    PSD = mean(PSD, na.rm = T),
+    PS = mean(PS, na.rm = T),
+    CHEGA = mean(CHEGA, na.rm = T),
+    Others = mean(Others, na.rm = T)
+  )
+
+```
+
+
+
+
+# Dealing with missing data
+
+
+```{r message = FALSE}
+library(strucchange)
+library(imputeTS)
+
+dateall <- as.Date(seq(from = min(pt_polls2$Date), to = max(pt_polls2$Date), by = "days" ))
+dateall <- as.data.frame(dateall) %>% 
+  left_join(pt_polls2, by  = c("dateall" = "Date"))
+
+PSD <- na_kalman(dateall$PSD, model = "StructTS")
+PS <- na_kalman(dateall$PS, model = "StructTS")
+CHEGA <- na_kalman(dateall$CHEGA, model = "StructTS")
+Others <- na_kalman(dateall$Others, model = "StructTS")
+
+p1 <- ggplot_na_distribution(dateall$PSD, xlab = "Date", ylab = "PSD vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p2 <- ggplot_na_distribution(dateall$PS, xlab = "Date", ylab = "PS vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p3 <- ggplot_na_distribution(dateall$CHEGA, xlab = "Date", ylab = "CHEGA vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p4 <- ggplot_na_distribution(dateall$Others, xlab = "Date", ylab = "Others vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+
+grid.arrange(p1, p2,p3,p4, nrow = 2)
+
+
+
+
+p1 <- ggplot_na_distribution(PSD, xlab = "Date", ylab = "PSD vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p2 <- ggplot_na_distribution(PS, xlab = "Date", ylab = "PS vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p3 <- ggplot_na_distribution(CHEGA, xlab = "Date", ylab = "CHEGA vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p4 <- ggplot_na_distribution(Others, xlab = "Date", ylab = "Others vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+
+grid.arrange(p1, p2,p3,p4, nrow = 2)
+
+
+```
+
+
+
+# ARIMA
+
+```{r message = FALSE}
+library(forecast)
+
+PSDts <- ts(PSD)
+PSts <- ts(PS)
+CHEGAts <- ts(CHEGA)
+Othersts <- ts(Others)
+
+
+
+
+PSDarima <- auto.arima(PSDts)
+PSarima <- auto.arima(PSts)
+CHEGAarima <- auto.arima(CHEGAts)
+Othersarima <- auto.arima(Othersts)
+
+p1 <- gghistogram(residuals(PSDarima))
+p2 <- gghistogram(residuals(PSarima))
+p3 <- gghistogram(residuals(CHEGAarima))
+p4 <- gghistogram(residuals(Othersarima))
+
+grid.arrange(p1, p2,p3,p4, nrow = 2)
+
+
+p1 <- ggAcf(residuals(PSDarima))
+p2 <- ggAcf(residuals(PSarima))
+p3 <- ggAcf(residuals(CHEGAarima))
+p4 <- ggAcf(residuals(Othersarima))
+
+grid.arrange(p1, p2,p3,p4, nrow = 2)
+
+
+PSDts10 <- PSDts[1:29] %>% ts()
+PSts10 <- PSts[1:29] %>% ts()
+CHEGAts10 <- CHEGAts[1:29] %>% ts()
+Othersts10 <- Othersts[1:29] %>% ts()
+
+PSDarima10 <- auto.arima(PSDts10)
+PSarima10 <- auto.arima(PSts10)
+CHEGAarima10 <- auto.arima(CHEGAts10)
+Othersarima10 <- auto.arima(Othersts10)
+
+
+```
+
+
+## FORECAST
+
+```{r message = FALSE}
+
+
+futurePSD = plot(forecast(PSDarima, h = 2), main = "PSD Valid Vote Share in %")
+futurePS = plot(forecast(PSarima, h = 2), main = "PS Valid Vote Share in %")
+futureCHEGA = plot(forecast(CHEGAarima, h = 2), main = "CHEGA Valid Vote Share in %")
+futureOthers = plot(forecast(Othersarima, h = 2), main = "Others Valid Vote Share in %")
+
+
+
+
+```
+
+```{r message = FALSE}
+
+par(mfrow = c(2, 2))
+
+plot(forecast(PSDarima10, h = 2), main = "PSD Valid Vote Share in %")
+points(x = 31,y =  60.66, pch = 16, col = "red", cex = 2)
+
+plot(forecast(PSarima10, h = 2), main = "PS Valid Vote Share in %")
+points(x = 31,y =  12.96, pch = 16, col = "red", cex = 2)
+
+plot(forecast(CHEGAarima10, h = 2), main = "CHEGA Valid Vote Share in %")
+points(x = 31,y =  11.93, pch = 16, col = "red", cex = 2)
+
+plot(forecast(Othersarima10, h = 2), main = "Others Valid Vote Share in %")
+points(x = 31,y =  14.45, pch = 16, col = "red", cex = 2)
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

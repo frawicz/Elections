@@ -1,0 +1,183 @@
+---
+title: "structural model"
+author: "Fernando Rawicz"
+date: "31/05/2021"
+output: html_document
+---
+
+```{r message = FALSE}
+options(scipen = 9999)
+rm(list = ls())
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+set.seed(415)
+
+library(rstan)
+library(shinystan)
+library(stringr)
+library(dplyr)
+library(readxl)
+library(gtools)
+library(rjags)
+library(runjags)
+library(brms)
+library(knitr)
+library(DT)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+```
+
+
+```{r}
+
+
+br_struc <- read_excel("data/pollsbrazil.xltx", sheet = "Structural2") %>% 
+  mutate(
+    Inflation_previous_year = as.numeric(Inflation_previous_year),
+    GDP_Growth = as.numeric(GDP_Growth),
+    Unemployment = as.numeric(Unemployment)
+  )
+
+
+```
+
+```{r}
+lmpt <- lm(PT ~ Inflation_previous_year + GDP_Growth + Unemployment, data = br_struc)
+lmpsdb <- lm(PSDB ~ Inflation_previous_year + GDP_Growth + Unemployment, data = br_struc)
+lmThird <- lm(Third ~ Inflation_previous_year + GDP_Growth + Unemployment, data = br_struc)
+
+
+summary(lmpt)
+summary(lmpsdb)
+summary(lmThird)
+
+```
+
+```{r}
+dfnew <- data.frame(Inflation_previous_year =0,
+           GDP_Growth = 1.9,
+           Unemployment = 11.9
+           )
+
+predict(lmpt, dfnew, interval = "prediction")
+predict(lmpsdb, dfnew, interval = "prediction")
+predict(lmThird, dfnew, interval = "prediction")
+
+```
+
+```{r}
+
+
+pt_struc <- read_excel("data/pollsportugal.xltx", sheet = "Structural") %>% 
+  mutate(
+    Inflation_previous_year = as.numeric(Inflation_previous_year),
+    GDP_Growth = as.numeric(GDP_Growth),
+    Unemployment = as.numeric(Unemployment)
+  )
+
+
+```
+
+```{r}
+lmps <- lm(PS ~ Inflation_previous_year + GDP_Growth + Unemployment, data = pt_struc)
+lmother <- lm(Other ~ Inflation_previous_year + GDP_Growth + Unemployment, data = pt_struc)
+
+
+summary(lmps)
+summary(lmother)
+
+stargazer::stargazer(lmps)
+stargazer::stargazer(lmps, lmother)
+```
+
+```{r}
+dfnew <- data.frame(Inflation_previous_year =0,
+           GDP_Growth = -7.7,
+           Unemployment = 6.8
+           )
+
+predict(lmps, dfnew, interval = "prediction")
+predict(lmother, dfnew, interval = "prediction")
+
+
+
+```
+
+
+
+
+
+
+## Bayesian Approach
+Portugal
+
+```{r}
+
+library(mlbench)
+library(rstanarm)
+library(bayestestR)
+library(bayesplot)
+library(insight)
+library(broom)
+library(modelsummary)
+library(BayesPostEst)
+
+
+model_pt_ps <- stan_glm(PS ~ Inflation_previous_year + GDP_Growth + Unemployment, data = pt_struc)
+model_pt_other <- stan_glm(Other ~ Inflation_previous_year + GDP_Growth + Unemployment, data = pt_struc)
+
+
+# prior_summary(model_pt_other)
+# 
+# 
+# mcmc_dens(model, pars = c("Inflation_previous_year", "GDP_Growth", "Unemployment"))+
+#   vline_at(-0.143, col="red")
+# 
+# 
+# describe_posterior(model_pt_other)
+# 
+# hdi(model_pt)
+
+
+
+
+mcmcReg(list(model_pt_ps, model_pt_other),
+        pars = c( "Inflation_previous_year", "GDP_Growth", "Unemployment") ,  format = 'latex', regex = T, doctype = F)
+
+```
+
+
+
+Brasil
+
+```{r}
+
+br_struc <- br_struc %>% 
+mutate(
+  PT = as.numeric(PT),
+  PSDB = as.numeric(PSDB),
+  Third = as.numeric(Third),
+  Inflation_previous_year = as.numeric(Inflation_previous_year),
+  GDP_Growth = as.numeric(GDP_Growth),
+  Unemployment = as.numeric(Unemployment)
+)
+
+  
+
+model_br_pt <- stan_glm(PT ~ Inflation_previous_year + GDP_Growth + Unemployment, data = br_struc)
+model_br_psdb <- stan_glm(PSDB ~ Inflation_previous_year + GDP_Growth + Unemployment, data = br_struc)
+model_br_third <- stan_glm(Third ~ Inflation_previous_year + GDP_Growth + Unemployment, data = br_struc)
+
+
+
+mcmcReg(list(model_br_pt, model_br_psdb, model_br_third),
+        pars = c( "Inflation_previous_year", "GDP_Growth", "Unemployment") ,  format = 'latex', regex = T, doctype = F)
+
+```
+
+
+
+
+
+
+
+

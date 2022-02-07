@@ -1,0 +1,149 @@
+---
+title: "BR_multinomialrmd"
+author: "Fernando Rawicz"
+date: "22/05/2021"
+output: html_document
+---
+
+```{r}
+rm(list = ls())
+
+options(scipen = 9999)
+
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+library(rstan)
+library(shinystan)
+library(stringr)
+library(dplyr)
+library(readxl)
+library(gtools)
+library(rjags)
+library(runjags)
+library(brms)
+library(knitr)
+library(DT)
+library(tidyverse)
+library(bsts)
+library(MARSS)
+library(reshape2)
+```
+
+## R Markdown
+
+
+```{r cars}
+
+nchains <- 3
+niter <- 1000
+
+
+election_date <- as.Date("07/10/2018", "%d/%m/%Y")
+
+
+br_polls <- read_excel("data/pollsbrazil.xltx")%>% 
+  filter(Company == "Datafolha" | Company == "Ibope") %>% 
+  # gather( key = "party", value = "share", -c("Company", "Date")
+  #             ) %>% 
+  mutate(days_to_election = election_date - as.Date(Date)) %>% 
+  mutate(iid = match(Company , sort(unique(Company))))
+
+
+party_names <- c("PSL", "PT", "PDT","PSDB", "REDE", "NOVO", "PODE", "MDB", "PATRI", "PSOL", "PSTU", 
+                  "DC", "PPL", "Null", "Unknown")
+
+nParties <- length(party_names)
+
+just_shares <- round(as.matrix(br_polls[,party_names] / 100) * 
+                       br_polls$Sample_size)
+
+
+
+```
+
+
+```{r}
+
+just_shares2 <- just_shares %>% 
+  data.frame() %>% 
+  mutate(Others = `NOVO` + `PODE` + `MDB` + `PATRI` + `PSOL` + `PSTU` + `DC` + `PPL`) %>% 
+  dplyr::select(c("PSL", "PT", "PDT", "PSDB", "REDE", "Others")) %>% 
+  as.matrix()
+
+
+br_polls <- br_polls %>%
+  mutate(t= 55 - days_to_election   )
+
+forstan <- list(
+  
+  # Dynamic Model
+  iid = br_polls$iid,
+  nInst = max(br_polls$iid),
+  nParties = 6,
+  nPolls = nrow(just_shares2),
+  nPeriods =  56, 
+  date = as.numeric(br_polls$t + 1),
+  y = just_shares2,
+  a_pred = as.numeric(c(.40, .20, .1,.1,.1,.1))
+  
+  
+)
+
+
+results <- stan(file = "combined_model2.stan", data =   forstan, warmup = 1000,
+                iter = 5000, chains = nchains, thin = 1, control = list(adapt_delta = 0.80, max_treedepth = 10) )
+
+
+```
+
+
+
+
+
+
+```{r}
+
+
+
+
+houseprior <- matrix(c(0,0,0,0,0,0,0,0,0,0,0,0), nrow = 2)
+
+
+forstan2 <- list(
+  
+  # Dynamic Model
+  iid = br_polls$iid,
+  nInst = max(br_polls$iid),
+  nParties = 6,
+  nPolls = nrow(just_shares2),
+  nPeriods =  56, 
+  date = as.numeric(br_polls$t + 1),
+  y = just_shares2,
+  a_pred = as.numeric(c(.40, .20, .1,.1,.1,.1)),
+  prior_house = houseprior
+  
+  
+)
+
+
+
+results2 <- stan(file = "combined_model2.stan", data = forstan2, warmup = 1000,
+                iter = 5000, chains = nchains, thin = 1, control = list(adapt_delta = 0.80, max_treedepth = 10) )
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

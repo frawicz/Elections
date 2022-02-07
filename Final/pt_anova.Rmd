@@ -1,0 +1,283 @@
+---
+title: "ANOVA PT"
+author: "Fernando Rawicz"
+date: "17/07/2021"
+output: html_document
+---
+
+```{r message = FALSE}
+rm(list =ls())
+options(scipen = 9999)
+
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+set.seed(415)
+
+library(tidyverse)
+library(rstan)
+# library(shinystan)
+library(stringr)
+library(dplyr)
+library(readxl)
+library(gtools)
+library(rjags)
+library(runjags)
+library(brms)
+library(knitr)
+library(DT)
+library(HDInterval)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+fileNameRoot = "teupaidecalcinha"
+
+
+candidates <- c("PS", "CHEGA", "PCP", "PSD", "BE", "IL", "RIR")
+
+
+pt_pitagorica <- read_excel("data/pollsportugal.xltx", sheet = "Pitagorica")%>% 
+  filter(Party %in% candidates)%>% 
+  mutate(Bias = Result  - Poll ) %>% 
+  mutate(Company = "Pitagorica")
+
+
+pt_UCP <- read_excel("data/pollsportugal.xltx", sheet = "UCP")%>% 
+  filter(Party %in% candidates)%>% 
+  mutate(Bias = Result  - Poll ) %>% 
+  mutate(Company = "UCP")
+
+
+pt_eurosondagem <- read_excel("data/pollsportugal.xltx", sheet = "Eurosondagem")%>% 
+  filter(Party %in% candidates)%>% 
+  mutate(Bias = Result  - Poll ) %>% 
+  mutate(Company = "Eurosondagem")
+
+
+pt_intercampus <- read_excel("data/pollsportugal.xltx", sheet = "Intercampus")%>% 
+  filter(Party %in% candidates)%>% 
+  mutate(Bias = Result  - Poll ) %>% 
+  mutate(Company = "Intercampus")
+
+
+pt_aximage <- read_excel("data/pollsportugal.xltx", sheet = "Aximage")%>% 
+  filter(Party %in% candidates)%>% 
+  mutate(Bias = Result  - Poll ) %>% 
+  mutate(Company = "Aximage")
+
+
+
+pt_bias_final <- rbind(pt_pitagorica, pt_UCP, pt_eurosondagem, pt_intercampus, pt_aximage) %>% 
+  mutate(Companyiid = match(Company , sort(unique(Company))))  %>% 
+  mutate(Eleciid = match(Election , sort(unique(Election)))) %>% 
+  mutate(Partyiid = match(Party , sort(unique(Party))))
+
+```
+
+
+## Frequentist ANOVA
+
+## One way
+
+```{r}
+
+summary(aov(Bias ~ Company, data = pt_bias_final))
+summary(aov(Bias ~ Party, data = pt_bias_final))
+
+```
+
+## Two way
+
+```{r}
+
+aaa <- aov(Bias ~ Company + Party + Company:Party, data = pt_bias_final)
+
+summary(aaa)
+
+group_by(pt_bias_final, Company, Party) %>% 
+  summarise(
+    count = n(),
+    mean = mean(Bias, na.rm = T),
+    sd = sd(Bias, na.rm = T)
+    
+  )
+
+
+model.tables(aaa,  type = "means", se = T)
+
+```
+
+
+## BAYESIAN ANOVA
+
+
+## One way
+
+```{r}
+source("anovafunc.R")
+
+  y = as.numeric(pt_bias_final$Bias)
+  x = as.numeric(as.factor(pt_bias_final$Party))
+  xlevels = levels(as.factor(pt_bias_final$Party))
+  Ntotal = length(y)
+  Nx1Lvl = length(unique(x))
+  yMean = mean(y)
+  ySD = sd(y)
+  agammaShRa = unlist( gammaShRaFromModeSD( mode=sd(y)/2 , sd=2*sd(y) )
+                       )
+  
+  
+  
+  
+  mcmcCoda = genMCMConeway(y, x, xlevels,  mu0 = 1.5, mu1 = 6 , 
+                    numSavedSteps=15000 , thinSteps=5,
+                   nChains = 3 )
+
+
+parameterNames = varnames(mcmcCoda) 
+show( parameterNames ) # show all parameter names, for reference
+for ( parName in c("ySigma","b0","b[1]","aSigma") ) {
+  diagMCMC( codaObject=mcmcCoda , parName=parName , 
+            saveName=fileNameRoot , saveType=graphFileType )
+}
+
+
+
+summpt <- summary(mcmcCoda)
+
+sumptstat <- summpt$statistics %>% as.data.frame()
+
+interval95 <- t(hdi(mcmcCoda, credMass = 0.95)) %>% as.data.frame() %>%  rename("HDI Lower 95" = lower,"HDI Upper 95" = upper )
+interval90 <- t(hdi(mcmcCoda, credMass = 0.9)) %>% as.data.frame() %>%  rename("HDI Lower 90" = lower,"HDI Upper 90" = upper )
+
+
+```
+
+
+
+
+
+
+
+## Two way
+
+```{r}
+
+
+source("anovafunc.R")
+
+  y = as.numeric(pt_bias_final$Bias)
+  x1 = as.numeric(as.factor(pt_bias_final$Party))
+  x1levels = levels(as.factor(pt_bias_final$Party))
+  x2 = as.numeric(as.factor(pt_bias_final$Company))
+  x2levels = levels(as.factor(pt_bias_final$Company))
+  Ntotal = length(y)
+  Nx1Lvl = length(unique(x1))
+  Nx2Lvl = length(unique(x2))
+  yMean = mean(y)
+  ySD = sd(y)
+  agammaShRa = unlist( gammaShRaFromModeSD( mode=sd(y)/2 , sd=2*sd(y) ) )
+
+  
+  dataList = list(
+    y = y ,
+    x1 = x1 ,
+    x2 = x2 ,
+    Ntotal = Ntotal ,
+    Nx1Lvl = Nx1Lvl ,
+    Nx2Lvl = Nx2Lvl ,
+    # data properties for scaling the prior:
+    yMean = yMean ,
+    ySD = ySD ,
+    agammaShRa = agammaShRa 
+  )
+
+
+
+mcmcCoda = genMCMC(y, x1,x2, x1levels, x2levels,  mu0 = 1.5, mu1 = 6,
+                    numSavedSteps=15000 , thinSteps=5,
+                   nChains = 3 )
+
+
+
+parameterNames = varnames(mcmcCoda) 
+show( parameterNames ) # show all parameter names, for reference
+for ( parName in c("b0","b1[1]","b2[1]","b1b2[1,1]","ySigma") ) {
+  diagMCMC( codaObject=mcmcCoda , parName=parName , 
+            saveName=fileNameRoot , saveType=graphFileType )
+}
+
+
+
+summpt <- summary(mcmcCoda)
+
+sumptstat <- summpt$statistics %>% as.data.frame()
+
+interval95 <- t(hdi(mcmcCoda, credMass = 0.95)) %>% as.data.frame() %>%  rename("HDI Lower 95" = lower,"HDI Upper 95" = upper )
+interval90 <- t(hdi(mcmcCoda, credMass = 0.9)) %>% as.data.frame() %>%  rename("HDI Lower 90" = lower,"HDI Upper 90" = upper )
+
+finstatpt <- cbind(sumptstat, interval95, interval90) %>% 
+  mutate_if(is.numeric, round,2) %>% 
+  select(-c("Naive SE", "Time-series SE"))
+
+library(xtable)
+
+xtable(finstatpt)
+
+```
+
+
+
+## Sentisivity analysis
+
+
+```{r}
+
+
+mcmcCoda1 = genMCMC(y, x1,x2, x1levels, x2levels,mu0 = 2.5, mu1 = 12.5,
+                    numSavedSteps=15000 , thinSteps=5,
+                   nChains = 3 )
+
+mcmcCoda2 = genMCMC(y, x1,x2, x1levels, x2levels,mu0 = 5, mu1 = 50,
+                    numSavedSteps=15000 , thinSteps=5,
+                   nChains = 3 )
+
+
+
+summbr1 <- summary(mcmcCoda1)
+summbr2 <- summary(mcmcCoda2)
+
+
+sumbrstat1 <- summbr1$statistics %>% as.data.frame() %>% select("Mean model 1" = "Mean", "SD model 1" = "SD")
+sumbrstat2 <- summbr2$statistics %>% as.data.frame() %>% select("Mean model 2" = "Mean", "SD model 2" = "SD")
+
+
+interval95model1 <- t(hdi(mcmcCoda1, credMass = 0.95)) %>% as.data.frame() %>%  rename("HDI Lower 95 model 1" = lower,"HDI Upper 95 model 1" = upper )
+interval95model2 <- t(hdi(mcmcCoda2, credMass = 0.95)) %>% as.data.frame() %>%  rename("HDI Lower 95 model 2" = lower,"HDI Upper 95 model 2" = upper )
+
+
+finstatbrensi <- cbind(sumbrstat1, sumbrstat2) %>% 
+  mutate_if(is.numeric, round,2)
+
+
+xtable(finstatbrensi)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

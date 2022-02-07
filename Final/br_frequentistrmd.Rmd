@@ -1,0 +1,246 @@
+---
+title: "br_frequentistrmd"
+author: "Fernando Rawicz"
+date: "25/05/2021"
+output: html_document
+---
+
+```{r message = FALSE}
+rm(list = ls())
+
+options(scipen = 9999)
+
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+library(rstan)
+library(shinystan)
+library(stringr)
+library(dplyr)
+library(readxl)
+library(gtools)
+library(rjags)
+library(runjags)
+library(brms)
+library(knitr)
+library(DT)
+library(tidyverse)
+library(bsts)
+library(MARSS)
+library(reshape2)
+library(tidybayes)
+library(lubridate)
+library(gridExtra)
+```
+
+
+
+
+```{r message = FALSE}
+br_polls <- read_excel("data/pollsbrazil.xltx") %>% 
+  arrange(Date) %>% 
+  mutate(sumlessnull = ( `PSL`+`PT`+`PDT`+`PSDB`+`REDE`+`NOVO`+
+                           `PODE`+`MDB`+`PATRI`+`PSOL`+`PSTU`+`DC`+`PPL` ) ) %>% 
+  filter(sumlessnull< 100) %>% 
+  filter(Company == "Datafolha" | Company == "Ibope"| Company == "Ipespe")
+
+# DT::datatable(br_polls)
+```
+
+
+```{r message = FALSE}
+
+  
+  br_polls2 <- br_polls %>% 
+     as.data.frame() %>% 
+    mutate(
+      PSL = round((PSL *100) / sumlessnull, 2),
+      PT =  round((PT *100) / sumlessnull, 2),
+      PDT =  round((PDT *100) / sumlessnull, 2),
+      PSDB =  round((PSDB *100) / sumlessnull, 2),
+      REDE =  round((REDE *100) / sumlessnull, 2),
+      Others =  round((( NOVO + PODE + MDB + PATRI + PSOL + PSTU + DC + PPL)*100)/sumlessnull, 2)
+    ) %>% 
+    dplyr::select(c( "Date", "PSL","PT","PDT","PSDB","REDE", "Others"))
+
+```
+
+```{r message = FALSE}
+
+  
+  br_polls2 <- br_polls2 %>% 
+  group_by(Date) %>% 
+ dplyr::summarize(
+    PSL = mean(PSL, na.rm = T),
+    PT = mean(PT, na.rm = T),
+    PDT = mean(PDT, na.rm = T),
+    PSDB = mean(PSDB, na.rm = T),
+    REDE = mean(REDE, na.rm = T),
+    Others = mean(Others, na.rm = T)
+  )
+
+```
+
+
+# Dealing with missing data
+
+
+```{r message = FALSE}
+library(strucchange)
+library(imputeTS)
+library(forecast)
+
+dateall <- as.Date(seq(from = min(br_polls2$Date), to = max(br_polls2$Date), by = "days" ))
+dateall <- as.data.frame(dateall) %>% 
+  left_join(br_polls2, by  = c("dateall" = "Date"))
+
+
+ggplot_na_distribution(dateall$PSL, xlab = "Days from the campaign start", ylab = "PSL vote share in %", subtitle = "Days with polls dotted and without in a red rectangle", x_axis_labels =dateall$dateall )
+
+
+
+PSL <- na_kalman(dateall$PSL, model = "auto.arima")
+ggplot_na_distribution(PSL, xlab = "Days from the campaign start", ylab = "PSL vote share in %", subtitle = "Days with polls dotted and without in a red rectangle", x_axis_labels =dateall$dateall )
+
+
+
+PSL <- na_kalman(dateall$PSL, model = "auto.arima")
+PT <- na_kalman(dateall$PT, model = "auto.arima")
+PDT <- na_kalman(dateall$PDT, model = "auto.arima")
+PSDB <- na_kalman(dateall$PSDB, model = "auto.arima")
+REDE <- na_kalman(dateall$REDE, model = "auto.arima")
+Others <- na_kalman(dateall$Others, model = "auto.arima")
+
+
+
+p1 <- ggplot_na_distribution(dateall$PSL, xlab = "Date", ylab = "PSL vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p2 <- ggplot_na_distribution(dateall$PT, xlab = "Date", ylab = "PT vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p3 <- ggplot_na_distribution(dateall$PDT, xlab = "Date", ylab = "PDT vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p4 <- ggplot_na_distribution(dateall$PSDB, xlab = "Date", ylab = "PSDB vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p5 <- ggplot_na_distribution(dateall$REDE, xlab = "Date", ylab = "REDE vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p6 <- ggplot_na_distribution(dateall$Others, xlab = "Date", ylab = "Others vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+
+grid.arrange(p1, p2,p3,p4,p5,p6, nrow = 2)
+
+
+
+p1 <- ggplot_na_distribution(PSL, xlab = "Date", ylab = "PSL vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p2 <- ggplot_na_distribution(PT, xlab = "Date", ylab = "PT vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p3 <- ggplot_na_distribution(PDT, xlab = "Date", ylab = "PDT vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p4 <- ggplot_na_distribution(PSDB, xlab = "Date", ylab = "PSDB vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p5 <- ggplot_na_distribution(REDE, xlab = "Date", ylab = "REDE vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+p6 <- ggplot_na_distribution(Others, xlab = "Date", ylab = "Others vote share in %", subtitle = " ", x_axis_labels =dateall$dateall, title = '' )
+
+grid.arrange(p1, p2,p3,p4,p5,p6, nrow = 2)
+
+
+PSLs10 <- PSL[1:40] %>% ts()
+PT10 <- PT[1:40] %>% ts()
+PDT10 <- PDT[1:40] %>% ts()
+PSDB10 <- PSDB[1:40] %>% ts()
+REDE10 <- REDE[1:40] %>% ts()
+Othersts10 <- Others[1:40] %>% ts()
+
+PSLarima10 <- auto.arima(PSLs10)
+PTarima10 <- auto.arima(PT10)
+PDTarima10 <- auto.arima(PDT10)
+PSDBarima10 <- auto.arima(PSDB10)
+REDE1arima10 <- auto.arima(REDE10)
+Othersarima10 <- auto.arima(Othersts10)
+
+
+```
+
+
+
+# ARIMA
+
+```{r message = FALSE}
+library(forecast)
+
+PSLts <- ts(PSL)
+PTts <- ts(PT)
+PDTts <- ts(PDT)
+PSDBts <- ts(PSDB)
+REDEts <- ts(REDE)
+Othersts <- ts(Others)
+
+PSLarima <- auto.arima(PSLts)
+PTarima <- auto.arima(PTts)
+PDTarima <- auto.arima(PDTts)
+PSDBarima <- auto.arima(PSDBts)
+REDEarima <- auto.arima(REDEts)
+Othersarima <- auto.arima(Othersts)
+
+
+
+p1 <- gghistogram(residuals(PSLarima))
+p2 <- gghistogram(residuals(PTarima))
+p3 <- gghistogram(residuals(PDTarima))
+p4 <- gghistogram(residuals(PSDBarima))
+p5 <- gghistogram(residuals(REDEarima))
+p6 <- gghistogram(residuals(Othersarima))
+
+grid.arrange(p1, p2,p3,p4,p5,p6, nrow = 2)
+
+
+p1 <- ggAcf(residuals(PSLarima))
+p2 <- ggAcf(residuals(PTarima))
+p3 <- ggAcf(residuals(PDTarima))
+p4 <- ggAcf(residuals(PSDBarima))
+p5 <- ggAcf(residuals(REDEarima))
+p6 <- ggAcf(residuals(Othersarima))
+
+grid.arrange(p1, p2,p3,p4,p5,p6, nrow = 2)
+
+
+
+```
+
+
+
+## FORECAST
+
+```{r message = FALSE}
+
+par(mfrow = c(3, 2))
+
+plot(forecast(PSLarima, h = 2), main = "PSL Valid Vote Share in %", ylim = c(29,47))
+points(x = 52,y =  46.03, pch = 16, col = "red", cex = 2)
+
+plot(forecast(PTarima, h = 2), main = "PT Valid Vote Share in %", ylim = c(4,30))
+points(x = 52,y =  29.28, pch = 16, col = "red", cex = 2)
+
+plot(forecast(PDTarima, h = 2), main = "PDT Valid Vote Share in %")
+points(x = 52,y =  12.47, pch = 16, col = "red", cex = 2)
+
+plot(forecast(PSDBarima, h = 2), main = "PSDB Valid Vote Share in %", ylim = c(3,14))
+points(x = 52,y =  4.76, pch = 16, col = "red", cex = 2)
+
+plot(forecast(REDEarima, h = 2), main = "REDE Valid Vote Share in %")
+points(x = 52,y =  1, pch = 16, col = "red", cex = 2)
+
+plot(forecast(Othersarima, h = 2), main = "Others Valid Vote Share in %", ylim = c(3,18))
+points(x = 52,y =  4.46, pch = 16, col = "red", cex = 2)
+
+
+
+
+
+```
+
+```{r message = FALSE}
+
+forecast(PSLarima10, h = 2)
+forecast(PTarima10, h = 2)
+forecast(PDTarima10, h = 2)
+forecast(PSDBarima, h = 2)
+forecast(REDEarima, h = 2)
+forecast(Othersarima, h = 2)
+
+```
+
+
+
+
+
+

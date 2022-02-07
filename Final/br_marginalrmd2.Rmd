@@ -1,0 +1,452 @@
+---
+title: "br_marginal"
+author: "Fernando Rawicz"
+date: "12/05/2021"
+output: html_document
+---
+
+```{r message = FALSE}
+rm(list = ls())
+
+options(scipen = 9999)
+
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+library(rstan)
+library(shinystan)
+library(stringr)
+library(dplyr)
+library(readxl)
+library(gtools)
+library(rjags)
+library(runjags)
+library(brms)
+library(knitr)
+library(DT)
+library(tidyverse)
+library(bsts)
+library(MARSS)
+library(reshape2)
+library(tidybayes)
+library(lubridate)
+library(gridExtra)
+```
+
+
+
+## The data 
+
+The data is the evolution of the polls for all the candidates in Brazilian election of 2018. The polls used are only the ones made by Ibope and Datafolha. Every graph with the evolution is shown below:
+
+
+```{r message = FALSE}
+br_polls <- read_excel("data/pollsbrazil.xltx") %>% 
+  arrange(Date) %>% 
+  mutate(sumlessnull = ( `PSL`+`PT`+`PDT`+`PSDB`+`REDE`+`NOVO`+
+                           `PODE`+`MDB`+`PATRI`+`PSOL`+`PSTU`+`DC`+`PPL` ) ) %>% 
+  filter(sumlessnull< 100) %>% 
+  filter(Company == "Datafolha" | Company == "Ibope"| Company == "Ipespe")
+
+# DT::datatable(br_polls)
+```
+
+```{r message = FALSE}
+
+  
+  br_polls2 <- br_polls %>% 
+     as.data.frame() %>% 
+    mutate(
+      PSL = round((PSL *100) / sumlessnull, 2),
+      PT =  round((PT *100) / sumlessnull, 2),
+      PDT =  round((PDT *100) / sumlessnull, 2),
+      PSDB =  round((PSDB *100) / sumlessnull, 2),
+      REDE =  round((REDE *100) / sumlessnull, 2),
+      Others =  round((( NOVO + PODE + MDB + PATRI + PSOL + PSTU + DC + PPL)*100)/sumlessnull, 2)
+    ) %>% 
+    dplyr::select(c( "Date", "PSL","PT","PDT","PSDB","REDE", "Others"))
+
+
+plot.xts(xts(x = br_polls2$PSL, order.by = as.Date(br_polls$Date)), main = "PSL" )
+ 
+plot.xts(xts(x = br_polls2$PT, order.by = as.Date(br_polls$Date)), main = "PT" )
+
+plot.xts(xts(x = br_polls2$PDT, order.by = as.Date(br_polls$Date)), main = "PDT" )
+  
+plot.xts(xts(x = br_polls2$PSDB, order.by = as.Date(br_polls$Date)), main = "PSDB" )
+ 
+plot.xts(xts(x = br_polls2$REDE, order.by = as.Date(br_polls$Date)), main = "REDE" )
+
+plot.xts(xts(x = br_polls2$Others, order.by = as.Date(br_polls$Date)), main = "Others" )
+  
+```
+
+
+## AR1 model with intercept
+
+
+The first model estimated is a bayesian version of an AR 1 which is as follows:
+
+
+$$
+X_t = bx_{t-1} + u + w_t,  w_t \sim n(0,q) 
+$$
+$$
+E[x_t] = bx_{t-t} + u
+$$
+The analysis here is performed only for the PSL party, which is the winner`s party. The other ones will be performed if the analysis is correct.
+
+```{r message = FALSE}
+
+
+
+jagsscript <- "
+model {  
+   a ~ dnorm(0, 0.01); 
+   inv.q ~ dgamma(0.1, 0.1); 
+   q <- 1/inv.q; 
+   b ~ dnorm( 0, 2);
+   
+   X0 ~ dnorm(0, inv.q * (1 - b * b));
+   # t=1
+   EY[1] = a + b * X0;
+   Y[1] ~ dnorm(EY[1], inv.q);
+   X[1] <- Y[1] - a;
+   for(i in 2:N) {
+      EY[i] = a + b * X[i-1];
+      Y[i] ~ dnorm(EY[1], inv.q);
+      X[i] <- Y[i]-a;
+   }
+}  
+"
+jags.params <- c("q", "EY", "a", "b")
+
+
+jags.data.psl <- list(Y = as.vector(br_polls2$PSL), N = length(as.vector(br_polls2$PSL)))
+jags.data.pt <- list(Y = as.vector(br_polls2$PT), N = length(as.vector(br_polls2$PT)))
+jags.data.pdt <- list(Y = as.vector(br_polls2$PDT), N = length(as.vector(br_polls2$PDT)))
+jags.data.psdb <- list(Y = as.vector(br_polls2$PSDB), N = length(as.vector(br_polls2$PSDB)))
+jags.data.rede <- list(Y = as.vector(br_polls2$REDE), N = length(as.vector(br_polls2$REDE)))
+jags.data.others <- list(Y = as.vector(br_polls2$Others), N = length(as.vector(br_polls2$Others)))
+
+
+
+
+```
+
+
+The convergence analysis is displayed in the traceplots for each data point
+
+```{r message = FALSE}
+
+mod.psl = jags.model(textConnection(jagsscript), data=jags.data.psl, n.chains=3)
+update(mod.psl, 1e3)
+mod_sim.psl = coda.samples(model=mod.psl, variable.names=jags.params, n.iter=5e3)
+
+mod.pt = jags.model(textConnection(jagsscript), data=jags.data.pt, n.chains=3)
+update(mod.pt, 1e3)
+mod_sim.pt = coda.samples(model=mod.pt, variable.names=jags.params, n.iter=5e3)
+
+mod.pdt = jags.model(textConnection(jagsscript), data=jags.data.pdt, n.chains=3)
+update(mod.pdt, 1e3)
+mod_sim.pdt = coda.samples(model=mod.pdt, variable.names=jags.params, n.iter=5e3)
+
+mod.psdb = jags.model(textConnection(jagsscript), data=jags.data.psdb, n.chains=3)
+update(mod.psdb, 1e3)
+mod_sim.psdb = coda.samples(model=mod.psdb, variable.names=jags.params, n.iter=5e3)
+
+mod.rede = jags.model(textConnection(jagsscript), data=jags.data.rede, n.chains=3)
+update(mod.rede, 1e3)
+mod_sim.rede = coda.samples(model=mod.rede, variable.names=jags.params, n.iter=5e3)
+
+mod.others = jags.model(textConnection(jagsscript), data=jags.data.others, n.chains=3)
+update(mod.others, 1e3)
+mod_sim.others = coda.samples(model=mod.others, variable.names=jags.params, n.iter=5e3)
+
+
+
+```
+The summary for the coefficients in the model:
+
+```{r message = FALSE}
+summary(mod_sim.psl)
+summary(mod_sim.pt)
+summary(mod_sim.pdt)
+summary(mod_sim.psdb)
+summary(mod_sim.rede)
+summary(mod_sim.others)
+```
+
+## Univariate space state model
+
+$$
+x_t = x_{t-1} + u +w_t, w_t \sim N(0,q)
+$$
+
+$$
+y_t = x_{t} + v_t, v_t \sim N(0,r)
+$$
+
+```{r message = FALSE}
+
+jagsscriptss <- "
+model {  
+   # priors on parameters
+   u ~ dnorm(0, 1); 
+   inv.q ~ dgamma(0.1,0.1); 
+   q <- 1/inv.q;
+   inv.r ~ dgamma(0.1,0.1);
+   r <- 1/inv.r; 
+   X0 ~ dnorm(Y1, 0.1);
+   
+   X[1] ~ dnorm(X0 + u, inv.q);
+   EY[1] <- X[1];
+   Y[1] ~ dnorm(EY[1], inv.r);
+   for(i in 2:N) {
+      X[i] ~ dnorm(X[i-1] + u, inv.q);
+      EY[i] <- X[i];
+      Y[i] ~ dnorm(EY[i], inv.r); 
+   }
+}  
+"
+jags.paramsss <- c("q", "r", "EY", "u")
+
+jags.datass.psl <- list(Y = as.vector(br_polls2$PSL), N = length(as.vector(br_polls2$PSL)), Y1 = as.vector(br_polls2$PSL)[1])
+jags.datass.pt <- list(Y = as.vector(br_polls2$PT), N = length(as.vector(br_polls2$PT)), Y1 = as.vector(br_polls2$PT)[1])
+jags.datass.pdt <- list(Y = as.vector(br_polls2$PDT), N = length(as.vector(br_polls2$PDT)), Y1 = as.vector(br_polls2$PDT)[1])
+jags.datass.psdb <- list(Y = as.vector(br_polls2$PSDB), N = length(as.vector(br_polls2$PSDB)), Y1 = as.vector(br_polls2$PSDB)[1])
+jags.datass.rede <- list(Y = as.vector(br_polls2$REDE), N = length(as.vector(br_polls2$REDE)), Y1 = as.vector(br_polls2$REDE)[1])
+jags.datass.others <- list(Y = as.vector(br_polls2$Others), N = length(as.vector(br_polls2$Others)), Y1 = as.vector(br_polls2$Others)[1])
+
+```
+
+The convergence analysis for this model
+
+```{r message = FALSE}
+
+modss.psl = jags.model(textConnection(jagsscriptss), data=jags.datass.psl, n.chains=3)
+update(modss.psl, 1e3)
+mod_simss.psl = coda.samples(model=modss.psl, variable.names=jags.paramsss, n.iter=5e3)
+
+modss.pt = jags.model(textConnection(jagsscriptss), data=jags.datass.pt, n.chains=3)
+update(modss.pt, 1e3)
+mod_simss.pt = coda.samples(model=modss.pt, variable.names=jags.paramsss, n.iter=5e3)
+
+modss.pdt = jags.model(textConnection(jagsscriptss), data=jags.datass.pdt, n.chains=3)
+update(modss.pdt, 1e3)
+mod_simss.pdt = coda.samples(model=modss.pdt, variable.names=jags.paramsss, n.iter=5e3)
+
+modss.psdb = jags.model(textConnection(jagsscriptss), data=jags.datass.psdb, n.chains=3)
+update(modss.psdb, 1e3)
+mod_simss.psdb = coda.samples(model=modss.psdb, variable.names=jags.paramsss, n.iter=5e3)
+
+modss.rede = jags.model(textConnection(jagsscriptss), data=jags.datass.rede, n.chains=3)
+update(modss.rede, 1e3)
+mod_simss.rede = coda.samples(model=modss.rede, variable.names=jags.paramsss, n.iter=5e3)
+
+modss.other = jags.model(textConnection(jagsscriptss), data=jags.datass.others, n.chains=3)
+update(modss.other, 1e3)
+mod_simss.other = coda.samples(model=modss.other, variable.names=jags.paramsss, n.iter=5e3)
+
+```
+
+The summary of the model
+
+```{r message = FALSE}
+summary(mod_simss.psl)
+summary(mod_simss.pt)
+summary(mod_simss.pdt)
+summary(mod_simss.psdb)
+summary(mod_simss.rede)
+summary(mod_simss.other)
+
+```
+## Forecasting
+
+
+Since the last poll is one day before the election, we will treat the election as T + 1. For this we will use a jags model with the last data being NA and the model will forecast for this value.
+
+### Forecast for the AR1 model
+
+```{r message = FALSE}
+jags.data.f.psl <- list(Y =as.vector(c(br_polls2$PSL, NA, NA)), N = length(as.vector(br_polls2$PSL)) + 2)
+jags.data.f.pt <- list(Y =as.vector(c(br_polls2$PT, NA, NA)), N = length(as.vector(br_polls2$PT)) + 2)
+jags.data.f.pdt <- list(Y =as.vector(c(br_polls2$PDT, NA, NA)), N = length(as.vector(br_polls2$PDT)) + 2)
+jags.data.f.psdb <- list(Y =as.vector(c(br_polls2$PSDB, NA, NA)), N = length(as.vector(br_polls2$PSDB)) + 2)
+jags.data.f.rede <- list(Y =as.vector(c(br_polls2$REDE, NA, NA)), N = length(as.vector(br_polls2$REDE)) + 2)
+jags.data.f.other <- list(Y =as.vector(c(br_polls2$Others, NA, NA)), N = length(as.vector(br_polls2$Others)) + 2)
+
+jags.params.f <- c("EY")
+
+
+mod.f.psl = jags.model(textConnection(jagsscript), data=jags.data.f.psl, n.chains=3)
+update(mod.f.psl, 1e3)
+mod_sim.f.psl = coda.samples(model=mod.f.psl, variable.names=jags.params.f, n.iter=5e3)
+
+mod.f.pt = jags.model(textConnection(jagsscript), data=jags.data.f.pt, n.chains=3)
+update(mod.f.pt, 1e3)
+mod_sim.f.pt = coda.samples(model=mod.f.pt, variable.names=jags.params.f, n.iter=5e3)
+
+mod.f.pdt = jags.model(textConnection(jagsscript), data=jags.data.f.pdt, n.chains=3)
+update(mod.f.pdt, 1e3)
+mod_sim.f.pdt = coda.samples(model=mod.f.pdt, variable.names=jags.params.f, n.iter=5e3)
+
+mod.f.psdb = jags.model(textConnection(jagsscript), data=jags.data.f.psdb, n.chains=3)
+update(mod.f.psdb, 1e3)
+mod_sim.f.psdb = coda.samples(model=mod.f.psdb, variable.names=jags.params.f, n.iter=5e3)
+
+mod.f.rede = jags.model(textConnection(jagsscript), data=jags.data.f.rede, n.chains=3)
+update(mod.f.rede, 1e3)
+mod_sim.f.rede = coda.samples(model=mod.f.rede, variable.names=jags.params.f, n.iter=5e3)
+
+mod.f.others = jags.model(textConnection(jagsscript), data=jags.data.f.other, n.chains=3)
+update(mod.f.others, 1e3)
+mod_sim.f.others = coda.samples(model=mod.f.others, variable.names=jags.params.f, n.iter=5e3)
+
+
+
+
+summary(mod_sim.f.psl)
+summary(mod_sim.f.pt)
+summary(mod_sim.f.pdt)
+summary(mod_sim.f.psdb)
+summary(mod_sim.f.rede)
+summary(mod_sim.f.others)
+
+```
+
+
+```{r message = FALSE}
+datevec <- c(br_polls2$Date, max(br_polls2$Date) + days(1), max(br_polls2$Date) + days(2))
+
+aaa <- summary(mod_sim.f.psl) 
+bbb <- aaa$statistics %>% data.frame() %>% dplyr::select("Mean") %>% cbind(datevec) %>% cbind(ccc)
+
+ccc <- aaa$quantiles %>% data.frame() 
+
+
+
+
+ggplot(bbb, aes(datevec)) +
+   geom_ribbon(aes(ymin = X2.5., ymax = X97.5.), fill = "grey70") +
+   geom_line(aes(y = Mean))
+
+
+```
+### Forecast for the Space State model
+
+```{r message = FALSE}
+
+jags.datass.f.psl <- list(Y = as.vector(c(br_polls2$PSL, NA, NA)), N = length(as.vector(br_polls2$PSL)) + 2, Y1 = as.vector(br_polls2$PSL)[1])
+jags.datass.f.pt <- list(Y = as.vector(c(br_polls2$PT, NA, NA)), N = length(as.vector(br_polls2$PT)) + 2, Y1 = as.vector(br_polls2$PT)[1])
+jags.datass.f.pdt <- list(Y = as.vector(c(br_polls2$PDT, NA, NA)), N = length(as.vector(br_polls2$PDT)) + 2, Y1 = as.vector(br_polls2$PDT)[1])
+jags.datass.f.psdb <- list(Y = as.vector(c(br_polls2$PSDB, NA, NA)), N = length(as.vector(br_polls2$PSDB)) + 2, Y1 = as.vector(br_polls2$PSDB)[1])
+jags.datass.f.rede <- list(Y = as.vector(c(br_polls2$REDE, NA, NA)), N = length(as.vector(br_polls2$REDE)) + 2, Y1 = as.vector(br_polls2$REDE)[1])
+jags.datass.f.others <- list(Y = as.vector(c(br_polls2$Others, NA, NA)), N = length(as.vector(br_polls2$Others)) + 2, Y1 = as.vector(br_polls2$Others)[1])
+
+
+jags.paramsss <- c("EY")
+
+modss.f.psl = jags.model(textConnection(jagsscriptss), data=jags.datass.f.psl, n.chains=3)
+update(modss.f.psl, 1e3)
+mod_simss.f.psl = coda.samples(model=modss.f.psl, variable.names=jags.paramsss, n.iter=5e3)
+
+modss.f.pt = jags.model(textConnection(jagsscriptss), data=jags.datass.f.pt, n.chains=3)
+update(modss.f.pt, 1e3)
+mod_simss.f.pt = coda.samples(model=modss.f.pt, variable.names=jags.paramsss, n.iter=5e3)
+
+modss.f.pdt = jags.model(textConnection(jagsscriptss), data=jags.datass.f.pdt, n.chains=3)
+update(modss.f.pdt, 1e3)
+mod_simss.f.pdt = coda.samples(model=modss.f.pdt, variable.names=jags.paramsss, n.iter=5e3)
+
+modss.f.psdb = jags.model(textConnection(jagsscriptss), data=jags.datass.f.psdb, n.chains=3)
+update(modss.f.psdb, 1e3)
+mod_simss.f.psdb = coda.samples(model=modss.f.psdb, variable.names=jags.paramsss, n.iter=5e3)
+
+modss.f.rede = jags.model(textConnection(jagsscriptss), data=jags.datass.f.rede, n.chains=3)
+update(modss.f.rede, 1e3)
+mod_simss.f.rede = coda.samples(model=modss.f.rede, variable.names=jags.paramsss, n.iter=5e3)
+
+modss.f.others = jags.model(textConnection(jagsscriptss), data=jags.datass.f.others, n.chains=3)
+update(modss.f.others, 1e3)
+mod_simss.f.others = coda.samples(model=modss.f.others, variable.names=jags.paramsss, n.iter=5e3)
+
+
+
+sumpsl <- summary(mod_simss.f.psl)
+sumpt <- summary(mod_simss.f.pt)
+sumpdt <- summary(mod_simss.f.pdt)
+sumpsdb <- summary(mod_simss.f.psdb)
+sumrede <- summary(mod_simss.f.rede)
+sumother <- summary(mod_simss.f.others)
+
+
+```
+
+
+```{r message = FALSE}
+
+quantilespsl <- sumpsl$quantiles  
+ggpsl <- sumpsl$statistics %>% data.frame() %>% dplyr::select("Mean") %>% cbind(datevec) %>% cbind(quantilespsl)
+
+quantilespt <- sumpt$quantiles  
+ggpt <- sumpt$statistics %>% data.frame() %>% dplyr::select("Mean") %>% cbind(datevec) %>% cbind(quantilespt)
+
+quantilespdt <- sumpdt$quantiles  
+ggpdt <- sumpdt$statistics %>% data.frame() %>% dplyr::select("Mean") %>% cbind(datevec) %>% cbind(quantilespdt)
+
+quantilespsdb <- sumpsdb$quantiles  
+ggpsdb <- sumpsdb$statistics %>% data.frame() %>% dplyr::select("Mean") %>% cbind(datevec) %>% cbind(quantilespsdb)
+
+quantilesrede <- sumrede$quantiles  
+ggrede <- sumrede$statistics %>% data.frame() %>% dplyr::select("Mean") %>% cbind(datevec) %>% cbind(quantilesrede)
+
+quantilesothers <- sumother$quantiles  
+ggothers <- sumother$statistics %>% data.frame() %>% dplyr::select("Mean") %>% cbind(datevec) %>% cbind(quantilesothers)
+
+
+p1 <- ggplot(ggpsl, aes(datevec)) +
+   geom_ribbon(aes(ymin = `2.5%`, ymax = `97.5%`), fill = "grey70") +
+   geom_line(aes(y = Mean)) +
+   labs(x = "Date",y = "%", title = "PSL Valid Vote Share in %")+
+  theme(plot.title = element_text(hjust = 0.5))+ 
+   geom_vline(xintercept = as.numeric(ggothers$datevec[c(26)]) )
+
+p2 <- ggplot(ggpt, aes(datevec)) +
+   geom_ribbon(aes(ymin = `2.5%`, ymax = `97.5%`), fill = "grey70") +
+   geom_line(aes(y = Mean)) +
+   labs(x = "Date",y = "%", title = "PT Valid Vote Share in %")+
+  theme(plot.title = element_text(hjust = 0.5))+ 
+   geom_vline(xintercept = as.numeric(ggothers$datevec[c(26)]) )
+
+p3 <- ggplot(ggpsl, aes(datevec)) +
+   geom_ribbon(aes(ymin = `2.5%`, ymax = `97.5%`), fill = "grey70") +
+   geom_line(aes(y = Mean)) +
+   labs(x = "Date",y = "%", title = "PDT Valid Vote Share in %")+
+  theme(plot.title = element_text(hjust = 0.5))+ 
+   geom_vline(xintercept = as.numeric(ggothers$datevec[c(26)]) )
+
+p4 <- ggplot(ggpsdb, aes(datevec)) +
+   geom_ribbon(aes(ymin = `2.5%`, ymax = `97.5%`), fill = "grey70") +
+   geom_line(aes(y = Mean)) +
+   labs(x = "Date",y = "%", title= "PSDB Valid Vote Share in %")+
+  theme(plot.title = element_text(hjust = 0.5))+ 
+   geom_vline(xintercept = as.numeric(ggothers$datevec[c(26)]) )
+
+p5 <- ggplot(ggrede, aes(datevec)) +
+   geom_ribbon(aes(ymin = `2.5%`, ymax = `97.5%`), fill = "grey70") +
+   geom_line(aes(y = Mean)) +
+   labs(x = "Date",y = "%", title = "REDE Valid Vote Share in %")+
+  theme(plot.title = element_text(hjust = 0.5))+ 
+   geom_vline(xintercept = as.numeric(ggothers$datevec[c(26)]) )
+
+p6 <- ggplot(ggothers, aes(datevec)) +
+   geom_ribbon(aes(ymin = `2.5%`, ymax = `97.5%`), fill = "grey70") +
+   geom_line(aes(y = Mean)) +
+   labs(x = "Date", title = "Other parties Valid Vote Share in %", y = "%")+
+  theme(plot.title = element_text(hjust = 0.5))+ 
+   geom_vline(xintercept = as.numeric(ggothers$datevec[c(26)]) )
+
+
+grid.arrange(p1, p2,p3,p4,p5,p6, nrow = 3)
+
+```
